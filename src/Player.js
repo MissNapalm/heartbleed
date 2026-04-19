@@ -699,7 +699,7 @@ export class Player {
     if (input.key('KeyD')) dir.addScaledVector(right,  1);
 
     this._moving = dir.lengthSq() > 0;
-    if this._moving) dir.normalize();
+    if (this._moving) dir.normalize();
     this.vel.x = dir.x * SPEED * this._moveSpeedMul;
     this.vel.z = dir.z * SPEED * this._moveSpeedMul;
 
