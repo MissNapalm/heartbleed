@@ -23,10 +23,10 @@ const BULLET_LIFE      = 2.5;
 const FIRE_RATE        = 0.20;           // seconds between shots
 const MAX_BULLETS      = 60;
 const BT_DURATION      = 6.0;
-const BT_SCALE         = 0.18;
-const DIVE_SPEED       = 13;
-const DIVE_UP          = 5.5;
-const DIVE_SCALE       = 0.20;
+const BT_SCALE         = 0.1;
+const DIVE_SPEED       = 4;
+const DIVE_UP          = 6;
+const DIVE_SCALE       = 0.8;
 const DIVE_GRAVITY     = GRAVITY * 0.55;
 const DIVE_COOLDOWN    = 2.0;
 
@@ -38,9 +38,10 @@ export class Player {
     this.pos      = new THREE.Vector3(0, 0, 5);
     this.vel      = new THREE.Vector3();
 
-    this.camYaw   = Math.PI;   // start facing camera toward -Z (toward scene)
-    this.camPitch = 0.18;      // ~10° down — more horizontal so bullets are visible
-    this.camDist  = CAM_DIST;
+    this.camYaw    = Math.PI;
+    this.camPitch  = 0.18;
+    this.camDist   = CAM_DIST;
+    this.camHeight = CAM_PIVOT_H;
 
     this.grounded       = false;
     this.jumps          = 0;
@@ -59,9 +60,11 @@ export class Player {
     this._flipAngle    = 0;
 
     this._diving       = false;
+    this._sliding      = false;
     this._diveSlow     = false;
     this._diveCooldown = 0;
     this._diveTilt     = 0;
+    this._meshDiveY    = 0;
     this._diveDir       = new THREE.Vector3();
     this._shiftPrev     = false;
 
@@ -212,13 +215,15 @@ export class Player {
     this._shiftPrev = shiftDown;
     if (this._diveCooldown > 0) this._diveCooldown -= realDt;
 
-    // Releasing shift mid-dive cancels bullet time but keeps the dive pose
-    if (this._diving && !shiftDown) this._diveSlow = false;
-    // Landing ends both dive and bullet time
-    if (this._diving && this.grounded) { this._diving = false; this._diveSlow = false; }
+    // Releasing shift cancels bullet time (pose stays until you land/stand)
+    if ((this._diving || this._sliding) && !shiftDown) this._diveSlow = false;
+    // Landing from dive → enter slide
+    if (this._diving && this.grounded) { this._diving = false; this._sliding = true; }
+    // Releasing shift while sliding → stand up
+    if (this._sliding && !shiftDown) this._sliding = false;
 
-    // Tilt ramps to 1 in 0.15s during dive, ramps back to 0 in 0.20s after landing
-    this._diveTilt = this._diving
+    // Tilt stays up through dive+slide, ramps down after
+    this._diveTilt = (this._diving || this._sliding)
       ? Math.min(1, this._diveTilt + realDt / 0.15)
       : Math.max(0, this._diveTilt - realDt / 0.20);
 
@@ -235,19 +240,23 @@ export class Player {
 
     this._look(input);
     this._handleFire(realDt, input);
-    if (!this._diving) this._setHorizVel(input);
+    if (!this._diving && !this._sliding) this._setHorizVel(input);
 
-    // dive uses real-time physics so the arc is a full leap, not a 25cm hop
-    const physDt = this._diving ? realDt : dt;
+    // slide friction
+    if (this._sliding) {
+      const friction = Math.exp(-3 * dt);
+      this.vel.x *= friction;
+      this.vel.z *= friction;
+    }
 
     // horizontal
     this._wallNormal = null;
-    this.pos.x += this.vel.x * physDt;
-    this.pos.z += this.vel.z * physDt;
+    this.pos.x += this.vel.x * dt;
+    this.pos.z += this.vel.z * dt;
     this._resolveH(boxes);
     this._clampBounds();
 
-    if (!this._diving) {
+    if (!this._diving && !this._sliding) {
       this._updateWallRun(dt);
       this._handleJump(input);
     }
@@ -255,10 +264,10 @@ export class Player {
     // vertical
     if (!this.grounded) {
       const grav = this._diving ? DIVE_GRAVITY : this.wallRunning ? WR_GRAVITY : GRAVITY;
-      this.vel.y += grav * physDt;
+      this.vel.y += grav * dt;
     }
     this._prevY = this.pos.y;
-    this.pos.y += this.vel.y * physDt;
+    this.pos.y += this.vel.y * dt;
     this._resolveV(boxes);
 
     this._updateBullets(dt, realDt, boxes, targets);
@@ -279,9 +288,23 @@ export class Player {
   }
 
   _handWorldPos() {
-    const meshRight = new THREE.Vector3(Math.cos(this._meshYaw), 0, -Math.sin(this._meshYaw));
     const dir = new THREE.Vector3();
     this.camera.getWorldDirection(dir);
+    if (this._diveTilt > 0) {
+      // Compute shoulder world position from the actual tilted mesh pose
+      const diveYaw = Math.atan2(this._diveDir.x, this._diveDir.z);
+      const uprightQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0), diveYaw);
+      const meshQ = uprightQ.clone().slerp(this._diveQ(), this._diveTilt);
+      const rotatedPivot = new THREE.Vector3(0, 0.95, 0).applyQuaternion(meshQ);
+      const meshPos = new THREE.Vector3(
+        this.pos.x - rotatedPivot.x,
+        this._meshDiveY,
+        this.pos.z - rotatedPivot.z
+      );
+      const armOffset = new THREE.Vector3(0.225, 1.10, 0).applyQuaternion(meshQ);
+      return meshPos.add(armOffset).addScaledVector(dir, 0.47);
+    }
+    const meshRight = new THREE.Vector3(Math.cos(this._meshYaw), 0, -Math.sin(this._meshYaw));
     return new THREE.Vector3(this.pos.x, this.pos.y + 1.10, this.pos.z)
       .addScaledVector(meshRight, 0.225)
       .addScaledVector(dir, 0.47);
@@ -522,9 +545,14 @@ export class Player {
       const aimWorld = new THREE.Vector3();
       this.camera.getWorldDirection(aimWorld);
       // Use full mesh quaternion so arm tracks correctly even when dive-tilted
-      const invMeshQ = this._diving
-        ? this._diveQ().invert()
-        : new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -this._meshYaw);
+      let invMeshQ;
+      if (this._diveTilt > 0) {
+        const diveYaw = Math.atan2(this._diveDir.x, this._diveDir.z);
+        const uprightQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0), diveYaw);
+        invMeshQ = uprightQ.slerp(this._diveQ(), this._diveTilt).invert();
+      } else {
+        invMeshQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0), -this._meshYaw);
+      }
       const localAim = aimWorld.clone().applyQuaternion(invMeshQ);
       return new THREE.Quaternion()
         .setFromUnitVectors(new THREE.Vector3(0, -1, 0), localAim);
@@ -546,22 +574,27 @@ export class Player {
   _animateMesh(dt) {
     this.mesh.position.copy(this.pos);
     this.mesh.rotation.y = this._meshYaw;
+    // Keep _meshDiveY in sync when not in dive/slide so landing starts from correct y
+    if (this._diveTilt <= 0) this._meshDiveY = this.pos.y;
 
     // Right arm always driven by quaternion slerp (handles shooting, walk, idle)
     this._rArmPivot.quaternion.slerp(this._rightArmTargetQ(), 0.30);
 
     // ── shootdodge dive ──────────────────────────────────────────────────────
     if (this._diveTilt > 0) {
-      // Slerp from upright-facing-diveDir → fully horizontal over _diveTilt (0→1)
       const diveYaw = Math.atan2(this._diveDir.x, this._diveDir.z);
       const uprightQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), diveYaw);
       this.mesh.quaternion.copy(uprightQ).slerp(this._diveQ(), this._diveTilt);
-      // Pivot around chest so the tilt looks like the body is rotating, not the feet
       const pivot   = new THREE.Vector3(0, 0.95, 0);
       const rotated = pivot.clone().applyQuaternion(this.mesh.quaternion);
+      // Lerp mesh Y toward target: chest-pivot height in air, floor level when sliding
+      const targetMeshY = this._sliding
+        ? this.pos.y
+        : this.pos.y + pivot.y - rotated.y;
+      this._meshDiveY += (targetMeshY - this._meshDiveY) * Math.min(1, 18 * dt);
       this.mesh.position.set(
         this.pos.x + pivot.x - rotated.x,
-        this.pos.y + pivot.y - rotated.y,
+        this._meshDiveY,
         this.pos.z + pivot.z - rotated.z
       );
       // Scale limb poses with tilt progress
@@ -639,7 +672,7 @@ export class Player {
   _updateCamera() {
     // back offset + right shoulder offset
     const cx = this.pos.x + Math.sin(this.camYaw) * Math.cos(this.camPitch) * this.camDist + Math.cos(this.camYaw) * CAM_SIDE;
-    const cy = this.pos.y + CAM_PIVOT_H + Math.sin(this.camPitch) * this.camDist;
+    const cy = this.pos.y + this.camHeight + Math.sin(this.camPitch) * this.camDist;
     const cz = this.pos.z + Math.cos(this.camYaw) * Math.cos(this.camPitch) * this.camDist - Math.sin(this.camYaw) * CAM_SIDE;
     this.camera.position.set(cx, cy, cz);
 
@@ -651,7 +684,7 @@ export class Player {
     }
     this._camRoll += (targetRoll - this._camRoll) * 0.12;
 
-    const lookTarget = new THREE.Vector3(this.pos.x, this.pos.y + CAM_PIVOT_H, this.pos.z);
+    const lookTarget = new THREE.Vector3(this.pos.x, this.pos.y + this.camHeight, this.pos.z);
     this.camera.lookAt(lookTarget);
 
     // apply roll via camera up vector

@@ -29,10 +29,12 @@ const startBtn   = document.getElementById('start-btn');
 const resumeBtn  = document.getElementById('resume-btn');
 const sensSlider     = document.getElementById('sens-slider');
 const sensVal        = document.getElementById('sens-val');
-const camDistSlider  = document.getElementById('camdist-slider');
-const camDistVal     = document.getElementById('camdist-val');
-const camAngleSlider = document.getElementById('camangle-slider');
-const camAngleVal    = document.getElementById('camangle-val');
+const camHeightSlider = document.getElementById('camheight-slider');
+const camHeightVal    = document.getElementById('camheight-val');
+const camDistSlider   = document.getElementById('camdist-slider');
+const camDistVal      = document.getElementById('camdist-val');
+const camAngleSlider  = document.getElementById('camangle-slider');
+const camAngleVal     = document.getElementById('camangle-val');
 const btOverlay      = document.getElementById('bt-overlay');
 const btHud          = document.getElementById('bt-hud');
 const btFill         = document.getElementById('bt-fill');
@@ -55,8 +57,14 @@ resumeBtn.addEventListener('click', () => {
 document.addEventListener('pointerlockchange', () => {
   const locked = document.pointerLockElement === renderer.domElement;
   input.locked = locked;
-  // Only show ESC menu if the start overlay is already gone
   if (!locked && overlay.style.display === 'none') {
+    escMenu.style.display = 'flex';
+  }
+});
+
+// Direct ESC key → open menu immediately without needing a second press
+document.addEventListener('keydown', e => {
+  if (e.code === 'Escape' && overlay.style.display === 'none') {
     escMenu.style.display = 'flex';
   }
 });
@@ -66,6 +74,12 @@ sensSlider.addEventListener('input', () => {
   const v = parseFloat(sensSlider.value);
   player.sensitivityMul = v;
   sensVal.textContent = v.toFixed(1);
+});
+
+camHeightSlider.addEventListener('input', () => {
+  const v = parseFloat(camHeightSlider.value);
+  player.camHeight = v;
+  camHeightVal.textContent = v.toFixed(1);
 });
 
 camDistSlider.addEventListener('input', () => {
