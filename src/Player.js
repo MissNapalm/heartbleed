@@ -23,8 +23,12 @@ const BULLET_LIFE      = 2.5;
 const FIRE_RATE        = 0.20;           // seconds between shots
 const MAX_BULLETS      = 60;
 const BT_DURATION      = 6.0;
-const BT_SCALE         = 0.1;
+//const BT_SCALE         = 0.1;
+const BT_SCALE_Q       = 0.03; // much stronger slow for Q bullet-time
+const BT_SCALE_DIVE    = 0.12; // gentler slow for dive
 const DIVE_SPEED       = 4;
+// new: wall trail interval
+const WALL_TRAIL_INTERVAL = 0.06;
 const DIVE_UP          = 6;
 const DIVE_GRAVITY     = GRAVITY * 0.55;
 const DIVE_COOLDOWN    = 2.0;
@@ -105,6 +109,16 @@ export class Player {
     this._muzzleLight2 = new THREE.PointLight(0xffaa33, 0, 6);
     scene.add(this._muzzleLight);
     scene.add(this._muzzleLight2);
+
+    // Bullet trails (small fading blobs)
+    this._bulletTrails = [];
+    this._trailGeo  = new THREE.SphereGeometry(0.03, 6, 4);
+    this._trailMat  = new THREE.MeshBasicMaterial({ color: 0xffee88, transparent: true, opacity: 0.6, depthWrite: false });
+
+    // Wall-run trails
+    this._wallTrails = [];
+    this._wallTrailTimer = 0;
+    this._wallTrailMat = new THREE.MeshBasicMaterial({ color: 0x66aaff, transparent: true, opacity: 0.55, depthWrite: false });
 
     this.mesh = this._buildMesh();
     scene.add(this.mesh);
@@ -272,7 +286,7 @@ export class Player {
     }
     this._fPrev = fDown;
 
-    const targetScale = (this._diveSlow || this.bulletTimeLeft > 0) ? BT_SCALE : 1.0;
+    const targetScale = this._diveSlow ? BT_SCALE_DIVE : (this.bulletTimeLeft > 0 ? BT_SCALE_Q : 1.0);
     const rampSpeed   = this._diveSlow ? 6 : this._btSlow ? 0.5 : 1.2;
     this.timeScale += (targetScale - this.timeScale) * Math.min(1, rampSpeed * realDt);
     this._timeBubbles = timeBubbles;
@@ -302,6 +316,17 @@ export class Player {
       this._handleJump(input);
     }
 
+    // spawn wall trail while wall-running, at intervals
+    if (this.wallRunning && this._wallNormal) {
+      this._wallTrailTimer += realDt;
+      if (this._wallTrailTimer >= WALL_TRAIL_INTERVAL) {
+        this._wallTrailTimer = 0;
+        this._spawnWallTrail();
+      }
+    } else {
+      this._wallTrailTimer = 0;
+    }
+
     // vertical
     if (!this.grounded) {
       const grav = this._diving ? DIVE_GRAVITY : this.wallRunning ? WR_GRAVITY : GRAVITY;
@@ -313,6 +338,7 @@ export class Player {
 
     this._updateBullets(dt, realDt, boxes, targets, timeBubbles);
     this._updateImpacts(realDt);
+    this._updateTrails(realDt); // update & fade bullet + wall trails
     this._animateMesh(dt);
     this._updateCamera();
     this._updateMuzzleFlash(realDt);
@@ -425,6 +451,12 @@ export class Player {
         b.mesh.position.addScaledVector(b.vel, subDt * bScale);
         const p = b.mesh.position;
 
+        // spawn a tiny trail blob at bullet position (fades quickly)
+        const tmesh = new THREE.Mesh(this._trailGeo, this._trailMat);
+        tmesh.position.copy(p);
+        this.scene.add(tmesh);
+        this._bulletTrails.push({ mesh: tmesh, life: 0.12 });
+
         if (targets?.testBullet(p)) {
           this._spawnImpact(p);
           this.scene.remove(b.mesh);
@@ -444,6 +476,55 @@ export class Player {
           this._bullets.splice(i, 1);
           break;
         }
+      }
+    }
+  }
+
+  // new helper: spawn a flat mark on the wall behind you
+  _spawnWallTrail() {
+    if (!this._wallNormal) return;
+    const sizeX = 0.32, sizeY = 0.12;
+    const geo = new THREE.PlaneGeometry(sizeX, sizeY);
+    const mesh = new THREE.Mesh(geo, this._wallTrailMat.clone());
+    // position slightly into the wall so it appears on surface
+    const offset = this._wallNormal.clone().multiplyScalar(-0.03);
+    mesh.position.set(this.pos.x + offset.x, this.pos.y + 0.95, this.pos.z + offset.z);
+    // orient plane so its normal faces outwards opposite to wall normal
+    const quat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), this._wallNormal.clone().negate());
+    // random yaw to add some variation
+    const yaw = (Math.random() - 0.5) * 0.9;
+    const yawQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0), yaw);
+    mesh.quaternion.copy(yawQ.multiply(quat));
+    mesh.renderOrder = 999;
+    mesh.material.transparent = true;
+    this.scene.add(mesh);
+    this._wallTrails.push({ mesh, life: 0.8 });
+  }
+
+  // new helper: update bullet/wall trails (fade + remove)
+  _updateTrails(realDt) {
+    // bullet trails
+    for (let i = this._bulletTrails.length - 1; i >= 0; i--) {
+      const t = this._bulletTrails[i];
+      t.life -= realDt;
+      if (t.life <= 0) {
+        this.scene.remove(t.mesh);
+        this._bulletTrails.splice(i, 1);
+      } else {
+        t.mesh.material.opacity = Math.max(0, t.life / 0.12) * 0.6;
+        t.mesh.scale.setScalar(0.6 + (1 - t.life / 0.12) * 0.6);
+      }
+    }
+
+    // wall trails
+    for (let i = this._wallTrails.length - 1; i >= 0; i--) {
+      const w = this._wallTrails[i];
+      w.life -= realDt;
+      if (w.life <= 0) {
+        this.scene.remove(w.mesh);
+        this._wallTrails.splice(i, 1);
+      } else {
+        w.mesh.material.opacity = (w.life / 0.8) * 0.55;
       }
     }
   }
@@ -647,12 +728,44 @@ export class Player {
       this._lLegPivot.rotation.x = -0.35 * this._diveTilt;
       this._rLegPivot.rotation.x =  0.25 * this._diveTilt;
       this.mesh.scale.set(1, 1, 1);
-      // Superman: arms thrust forward (-X rot) and slightly spread sideways (±Z rot)
-      const fwdQ  = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI * 0.48 * this._diveTilt);
-      const rSprQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -0.28 * this._diveTilt);
-      const lSprQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1),  0.28 * this._diveTilt);
-      rQ.copy(fwdQ).multiply(rSprQ);
-      lQ.copy(fwdQ).multiply(lSprQ);
+
+      // Arms should point at the crosshair while diving (not straight up).
+      // Compute world aim point from camera, then for each shoulder compute the
+      // world->mesh-local direction and make the arm's local -Y point to it.
+      const aimWorldDir = new THREE.Vector3();
+      this.camera.getWorldDirection(aimWorldDir);
+      const aimPoint = this.camera.position.clone().addScaledVector(aimWorldDir, 200);
+
+      const idQ = new THREE.Quaternion();
+      const rSprQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -0.18);
+      const lSprQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1),  0.18);
+
+      // Right shoulder
+      {
+        const shoulderWorld = new THREE.Vector3(0.225, 1.10, 0).applyQuaternion(this.mesh.quaternion).add(this.mesh.position);
+        const dirWorld = aimPoint.clone().sub(shoulderWorld);
+        if (dirWorld.lengthSq() < 1e-6) dirWorld.set(0, 0, -1);
+        dirWorld.normalize();
+        const invMeshQ = this.mesh.quaternion.clone().invert();
+        const localDir = dirWorld.clone().applyQuaternion(invMeshQ);
+        const armQ = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, -1, 0), localDir);
+        const targetR = armQ.multiply(rSprQ);
+        rQ.copy(idQ).slerp(targetR, this._diveTilt);
+      }
+
+      // Left shoulder
+      {
+        const shoulderWorld = new THREE.Vector3(-0.225, 1.10, 0).applyQuaternion(this.mesh.quaternion).add(this.mesh.position);
+        const dirWorld = aimPoint.clone().sub(shoulderWorld);
+        if (dirWorld.lengthSq() < 1e-6) dirWorld.set(0, 0, -1);
+        dirWorld.normalize();
+        const invMeshQ = this.mesh.quaternion.clone().invert();
+        const localDir = dirWorld.clone().applyQuaternion(invMeshQ);
+        const armQ = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, -1, 0), localDir);
+        const targetL = armQ.multiply(lSprQ);
+        lQ.copy(idQ).slerp(targetL, this._diveTilt);
+      }
+
       this._rArmPivot.quaternion.slerp(rQ, 0.3);
       this._lArmPivot.quaternion.slerp(lQ, 0.3);
       return;
@@ -663,11 +776,38 @@ export class Player {
       this._flipAngle += FLIP_SPEED * dt;
       const done = this._flipAngle >= Math.PI * 2;
       if (done) { this._flipAngle = 0; this._flipping = false; }
+
       const tuck = Math.max(0, Math.sin(this._flipAngle / 2));
       this._lLegPivot.rotation.x = 2.0 * tuck;
       this._rLegPivot.rotation.x = 2.0 * tuck;
-      this.mesh.rotation.x = done ? 0 : this._flipAngle;
       this.mesh.scale.set(1, 1, 1);
+
+      // Rotate around chest pivot instead of feet so the flip looks natural.
+      const pivot = new THREE.Vector3(0, 0.95, 0); // chest pivot in mesh-local space
+
+      // Always flip in the direction of the crosshair: use camera forward to get yaw.
+      const camFwd = new THREE.Vector3();
+      this.camera.getWorldDirection(camFwd);
+      const flipYaw = Math.atan2(camFwd.x, camFwd.z);
+
+      // build mesh quaternion combining yaw (toward crosshair) and flip around X
+      const meshQ = new THREE.Quaternion().setFromEuler(new THREE.Euler(
+        done ? 0 : this._flipAngle, // x (flip)
+        flipYaw,                    // y (yaw -> crosshair)
+        0
+      ));
+      // rotated pivot position after applying rotation
+      const rotated = pivot.clone().applyQuaternion(meshQ);
+      // place mesh so pivot stays anchored to world position (this.pos + pivot)
+      this.mesh.position.set(
+        this.pos.x + pivot.x - rotated.x,
+        this.pos.y + pivot.y - rotated.y,
+        this.pos.z + pivot.z - rotated.z
+      );
+      // apply rotation
+      this.mesh.quaternion.copy(meshQ);
+
+      // arms tuck in during flip
       rQ.setFromAxisAngle(new THREE.Vector3(1, 0, 0), -1.4 * tuck);
       lQ = rQ.clone();
       this._rArmPivot.quaternion.slerp(rQ, 0.3);
