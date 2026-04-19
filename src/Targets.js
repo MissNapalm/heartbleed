@@ -162,57 +162,60 @@ export class Targets {
   }
 
   update(realDt, timeBubbles, camera, playerPos, orbsShoot) {
-    for (let i = this._queue.length - 1; i >= 0; i--) {
-      this._queue[i] -= realDt;
-      if (this._queue[i] <= 0) {
-        this._queue.splice(i, 1);
-        this._spawnTarget();
+    // Targets (bad-guy spheres)
+    for (let i = this._targets.length - 1; i >= 0; i--) {
+      const t = this._targets[i];
+      const p = t.mesh.position;
+
+      // If the target is inside a time bubble, freeze it completely:
+      // pause bobbing, movement toward waypoints and shooting timer.
+      const frozen = timeBubbles ? timeBubbles.timeScaleAt(p) < 1.0 : false;
+      if (frozen) {
+        // Keep bar positioned above the mesh but hide any movement updates.
+        t.bar.group.position.set(p.x, p.y + RADIUS + 0.4, p.z);
+        t.bar.group.visible = false; // keep UI clean while frozen
+        // don't advance phase / waypoint / shootTimer
+        continue;
       }
-    }
 
-    const t = performance.now() / 1000;
-    for (const tgt of this._targets) {
-      const tScale = timeBubbles ? timeBubbles.timeScaleAt(tgt.center) : 1.0;
-      const eDt = realDt * tScale;
+      // Not frozen — normal behaviour
 
-      const toWP = new THREE.Vector3().subVectors(tgt.waypoint, tgt.center);
-      const dist = toWP.length();
-      if (dist < 0.5) {
-        tgt.waypoint = this._randomWaypoint();
+      // Bobbing
+      t.phase += realDt * BOB_SPEED;
+      p.y = t.center.y + Math.sin(t.phase) * BOB_AMP;
+
+      // Move center toward waypoint (horizontal only)
+      const toWp = new THREE.Vector3(t.waypoint.x - t.center.x, 0, t.waypoint.z - t.center.z);
+      const dist = toWp.length();
+      if (dist < 0.6) {
+        t.waypoint = this._randomWaypoint();
       } else {
-        const step = Math.min(tgt.speed * eDt, dist);
-        tgt.center.addScaledVector(toWP.normalize(), step);
-        tgt.center.x = Math.max(-MAP_HALF, Math.min(MAP_HALF, tgt.center.x));
-        tgt.center.z = Math.max(-MAP_HALF, Math.min(MAP_HALF, tgt.center.z));
-        tgt.center.y = Math.max(Y_MIN, Math.min(Y_MAX, tgt.center.y));
+        toWp.normalize();
+        t.center.addScaledVector(toWp, t.speed * realDt);
       }
 
-      tgt.mesh.position.copy(tgt.center);
-      tgt.mesh.position.y += Math.sin(t * BOB_SPEED + tgt.phase) * BOB_AMP;
-      tgt.mesh.rotation.y += eDt * 0.6;
+      // Smoothly move mesh toward center (gives nicer motion)
+      t.mesh.position.x += (t.center.x - t.mesh.position.x) * 0.12;
+      t.mesh.position.z += (t.center.z - t.mesh.position.z) * 0.12;
 
-      // Health bar — billboard toward camera
-      if (tgt.bar.group.visible && camera) {
-        tgt.bar.group.position.copy(tgt.mesh.position);
-        tgt.bar.group.position.y += RADIUS + 0.35;
-        tgt.bar.group.lookAt(camera.position);
-      }
+      // Health bar
+      t.bar.group.position.set(p.x, p.y + RADIUS + 0.4, p.z);
+      t.bar.group.visible = t.hp < 5;
 
-      // Orb shooting
-      if (orbsShoot && playerPos) {
-        tgt.shootTimer -= realDt;
-        if (tgt.shootTimer <= 0) {
-          tgt.shootTimer = SHOOT_INTERVAL * (0.7 + Math.random() * 0.6);
-          this._spawnOrbBullet(tgt.mesh.position.clone(), playerPos.clone());
-        }
+      // Shooting
+      t.shootTimer -= realDt;
+      if (t.shootTimer <= 0) {
+        if (orbsShoot) this._spawnOrbBullet(t.mesh.position, playerPos);
+        t.shootTimer = SHOOT_INTERVAL * (0.8 + Math.random() * 0.8);
       }
     }
 
-    // Orb bullets
+    // Orb bullets (shot by targets) — apply bubble slow factor per-frame so they decelerate immediately on entry
     for (let i = this._orbBullets.length - 1; i >= 0; i--) {
       const b = this._orbBullets[i];
       const bScale = timeBubbles ? timeBubbles.bulletScaleAt(b.mesh.position) : 1.0;
       b.mesh.position.addScaledVector(b.vel, realDt * bScale);
+
       const p = b.mesh.position;
       const oob = p.y < 0 || p.y > 12 || Math.abs(p.x) > 22 || Math.abs(p.z) > 22;
       if (oob) {

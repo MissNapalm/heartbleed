@@ -724,15 +724,12 @@ export class Player {
       }
       // not shooting, not moving → rQ/lQ stay identity (arms hang at sides)
     } else {
-      // airborne — arms straight forward (superman)
+      // airborne: only aim when shooting; otherwise keep arms hanging at sides
       if (this._shooting) {
         rQ = this._rightArmTargetQ();
         lQ = rQ.clone();
-      } else {
-        const fwd = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2);
-        rQ = fwd;
-        lQ = fwd.clone();
       }
+      // not shooting, not diving → rQ/lQ remain identity (arms hang at sides)
     }
 
     this._rArmPivot.quaternion.slerp(rQ, 0.25);
