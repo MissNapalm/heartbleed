@@ -503,9 +503,12 @@ export class Player {
 
         // spawn a thin rectangular trail segment (line-like) instead of a sphere blob.
         const baseTrailLife = 0.10;
-        // make trails a bit smaller overall; still enlarge in slow-mo but less aggressive
-        const trailLife = baseTrailLife / Math.max(0.05, this.timeScale);
-        const sizeMul = 0.6 / Math.max(0.05, this.timeScale); // larger in slow-mo
+        // Make Q-triggered bullet-time use the same (smaller) trail sizing as the dive/shift BT.
+        const effectiveScaleForTrails = (this.bulletTimeLeft > 0 && this._btMode === 'q')
+          ? BT_SCALE_DIVE
+          : this.timeScale;
+        const trailLife = baseTrailLife / Math.max(0.05, effectiveScaleForTrails);
+        const sizeMul = 0.6 / Math.max(0.05, effectiveScaleForTrails); // larger in slow-mo (but Q treated like dive)
         const length = Math.max(0.02, disp.length()); // ensure visible even for tiny steps
         const width  = 0.008 * sizeMul;
         const geo = new THREE.BoxGeometry(width, length, width);
@@ -705,7 +708,7 @@ export class Player {
     if (input.key('KeyD')) dir.addScaledVector(right,  1);
 
     this._moving = dir.lengthSq() > 0;
-    if (this._moving) dir.normalize();
+    if this._moving) dir.normalize();
     this.vel.x = dir.x * SPEED * this._moveSpeedMul;
     this.vel.z = dir.z * SPEED * this._moveSpeedMul;
 
