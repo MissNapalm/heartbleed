@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 
-const SPEED            = 9.04;
+const SPEED            = 11;
 const JUMP_VEL         = 9;
 const GRAVITY          = -22;
 const CHAR_H           = 1.3;
@@ -22,7 +22,7 @@ const BULLET_SPEED     = 500;
 const BULLET_LIFE      = 2.5;
 const FIRE_RATE        = 0.20;           // seconds between shots
 const MAX_BULLETS      = 60;
-const BT_DURATION      = 4.0;
+const BT_DURATION      = 3.0;
 //const BT_SCALE         = 0.1;
 const BT_SCALE_Q       = 0.03; // much stronger slow for Q bullet-time
 const BT_SCALE_DIVE    = 0.12; // gentler slow for dive

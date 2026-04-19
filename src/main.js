@@ -136,6 +136,59 @@ orbsShootCb.addEventListener('change', () => {
   orbsShootLabel.textContent = orbsShootCb.checked ? 'ON' : 'OFF';
 });
 
+// ensure the browser title is correct
+document.title = 'Neuro Runner';
+
+// Update or create a clear title block on the title screen overlay.
+// This replaces any leftover "fps" text on the title screen.
+(function ensureTitle() {
+  const overlay = document.getElementById('overlay');
+  if (!overlay) return;
+
+  // prefer an existing h1 if present
+  let h1 = overlay.querySelector('h1');
+  if (!h1) {
+    h1 = document.createElement('h1');
+    overlay.prepend(h1);
+  }
+  h1.id = 'title-main';
+  h1.innerText = 'Neuro Runner';
+  Object.assign(h1.style, {
+    color: '#ffffff',
+    fontFamily: 'monospace',
+    fontSize: '34px',
+    textAlign: 'center',
+    margin: '8px 0'
+  });
+
+  // mission blurb (create or update)
+  let blurb = document.getElementById('title-text');
+  const text = "You are Case Rogue, famous hacker in 2084. Your job is to jack into cyberspace and clear the viruses out of the system";
+  if (!blurb) {
+    blurb = document.createElement('div');
+    blurb.id = 'title-text';
+    overlay.insertBefore(blurb, overlay.querySelector('h1')?.nextSibling || null);
+  }
+  blurb.innerText = text;
+  Object.assign(blurb.style, {
+    color: '#ffffff',
+    fontFamily: 'monospace',
+    fontSize: '16px',
+    textAlign: 'center',
+    maxWidth: '820px',
+    padding: '8px 12px',
+    lineHeight: '1.3',
+    pointerEvents: 'none'
+  });
+
+  // replace any stray exact "fps" label inside overlay to avoid confusion
+  overlay.querySelectorAll('*').forEach(el => {
+    if (el.childElementCount === 0 && typeof el.innerText === 'string' && el.innerText.trim().toLowerCase() === 'fps') {
+      el.innerText = 'Neuro Runner';
+    }
+  });
+})();
+
 // ── Game loop ────────────────────────────────────────────────────────────────
 let prev = performance.now();
 function loop(now) {
