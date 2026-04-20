@@ -2,7 +2,7 @@ import * as THREE from 'three';
 
 const SPEED            = 11;
 const JUMP_VEL         = 9;
-const GRAVITY          = -35;
+const GRAVITY          = -20;
 const CHAR_H           = 1.3;
 const PR               = 0.3;
 const BOUNDS           = 19.7;
