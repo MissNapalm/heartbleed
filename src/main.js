@@ -2,7 +2,6 @@ import * as THREE from 'three';
 import { Input }       from './Input.js';
 import { Player }      from './Player.js';
 import { World }       from './World.js';
-import { Targets }     from './Targets.js';
 import { TimeBubbles } from './TimeBubbles.js';
 
 const scene    = new THREE.Scene();
@@ -20,7 +19,6 @@ document.body.appendChild(renderer.domElement);
 const input       = new Input();
 const player      = new Player(scene, camera);
 const world       = new World(scene);
-const targets     = new Targets(scene);
 const timeBubbles = new TimeBubbles(scene);
 
 window.addEventListener('resize', () => {
@@ -48,10 +46,6 @@ const jumpSlider      = document.getElementById('jump-slider');
 const jumpVal         = document.getElementById('jump-val');
 const bulletSlider    = document.getElementById('bullet-slider');
 const bulletVal       = document.getElementById('bullet-val');
-const diveSlider      = document.getElementById('dive-slider');
-const diveVal         = document.getElementById('dive-val');
-const orbsShootCb     = document.getElementById('orbs-shoot-cb');
-const orbsShootLabel  = orbsShootCb.nextElementSibling;
 const btOverlay      = document.getElementById('bt-overlay');
 const btHud          = document.getElementById('bt-hud');
 const btFill         = document.getElementById('bt-fill');
@@ -129,15 +123,6 @@ bulletSlider.addEventListener('input', () => {
   bulletVal.textContent = v.toFixed(1);
 });
 
-diveSlider.addEventListener('input', () => {
-  const v = parseFloat(diveSlider.value);
-  player._diveUpMul = v;
-  diveVal.textContent = v.toFixed(1);
-});
-
-orbsShootCb.addEventListener('change', () => {
-  orbsShootLabel.textContent = orbsShootCb.checked ? 'ON' : 'OFF';
-});
 
 // ensure the browser title is correct
 document.title = 'Neuro Runner';
@@ -209,8 +194,7 @@ function loop(now) {
   if (input.locked) {
     // ensure bubbles are processed first so grenades/bullets freeze immediately
     timeBubbles.update(dt, world.boxes);
-    player.update(dt, input, world.boxes, targets, timeBubbles);
-    targets.update(dt, timeBubbles, camera, player.pos, orbsShootCb.checked);
+    player.update(dt, input, world.boxes, null, timeBubbles);
   }
 
   const btActive = player.timeScale < 1;
