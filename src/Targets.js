@@ -1,13 +1,13 @@
 import * as THREE from 'three';
 
-const RADIUS         = 0.55;
+const RADIUS         = 0.65;
 const MAX_TARGETS    = 8;
 const RESPAWN_DELAY  = 4.0;
 const HIT_COLORS     = [0xff55cc, 0xff44bb, 0xff1199, 0xdd0077, 0xcc0055];
 const BOB_SPEED      = 1.2;
 const BOB_AMP        = 0.08;
 const MOVE_SPEED_MIN = 1.5;
-const MOVE_SPEED_MAX = 3.5;
+const MOVE_SPEED_MAX = 1.5;
 const MAP_HALF       = 16;
 const Y_MIN          = 0.9;
 const Y_MAX          = 4.5;
@@ -38,6 +38,9 @@ export class Targets {
     this._orbBulGeo = new THREE.SphereGeometry(0.18, 6, 5);
     this._orbBulMat = new THREE.MeshBasicMaterial({ color: 0xff3300 });
     this._usedSpots = new Set();
+
+    // orb size multiplier (1.0 = default). Adjustable at runtime.
+    this._orbSizeMul = 1.0;
 
     for (let i = 0; i < MAX_TARGETS; i++) this._spawnTarget();
   }
@@ -90,8 +93,11 @@ export class Targets {
     const mat  = new THREE.MeshLambertMaterial({ color: HIT_COLORS[0], emissive: 0x551133 });
     const mesh = new THREE.Mesh(this._geo, mat);
     const center = spot.pos.clone();
-    center.y += 0.5;
+    // place target so its bottom rests on the spawn Y according to current scale
+    center.y += RADIUS * this._orbSizeMul;
     mesh.position.copy(center);
+    // apply current orb size multiplier
+    mesh.scale.setScalar(this._orbSizeMul);
     this.scene.add(mesh);
 
     const bar = this._makeHealthBar();
@@ -107,10 +113,20 @@ export class Targets {
     });
   }
 
+  // runtime API: set orb size multiplier (affects existing + future targets)
+  setOrbSizeMul(v) {
+    this._orbSizeMul = Math.max(0.1, v);
+    for (const t of this._targets) {
+      if (t?.mesh) t.mesh.scale.setScalar(this._orbSizeMul);
+    }
+  }
+
   testBullet(pos) {
     for (let i = this._targets.length - 1; i >= 0; i--) {
       const t = this._targets[i];
-      if (t.mesh.position.distanceTo(pos) < RADIUS + 0.05) {
+      // use actual mesh scale so collision matches visual size
+      const realRadius = RADIUS * (t.mesh.scale.x || 1);
+      if (t.mesh.position.distanceTo(pos) < realRadius + 0.05) {
         t.hp--;
         if (t.hp <= 0) {
           this._explode(t.mesh.position.clone());
@@ -176,7 +192,8 @@ export class Targets {
       const frozen = timeBubbles ? timeBubbles.timeScaleAt(p) < 1.0 : false;
       if (frozen) {
         // Keep bar positioned above the mesh but hide any movement updates.
-        t.bar.group.position.set(p.x, p.y + RADIUS + 0.4, p.z);
+        const realRadius = RADIUS * (t.mesh.scale.x || 1);
+        t.bar.group.position.set(p.x, p.y + realRadius + 0.4, p.z);
         t.bar.group.visible = false; // keep UI clean while frozen
         // don't advance phase / waypoint / shootTimer
         continue;
@@ -203,7 +220,8 @@ export class Targets {
       t.mesh.position.z += (t.center.z - t.mesh.position.z) * 0.12;
 
       // Health bar
-      t.bar.group.position.set(p.x, p.y + RADIUS + 0.4, p.z);
+      const realRadius = RADIUS * (t.mesh.scale.x || 1);
+      t.bar.group.position.set(p.x, p.y + realRadius + 0.4, p.z);
       t.bar.group.visible = t.hp < 5;
 
       // Shooting

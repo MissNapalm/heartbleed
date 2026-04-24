@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 
 const SPEED            = 11;
-const JUMP_VEL         = 14;
+const JUMP_VEL         = 25;
 const GRAVITY          = -20;
 const CHAR_H           = 1.3;
 const PR               = 0.3;
@@ -11,8 +11,7 @@ const CAM_DIST         = 4.0;
 const CAM_PIVOT_H      = 1.5;
 const CAM_SIDE         = 0.65;
 const MAX_JUMPS        = 1;
-const WR_GRAVITY       = -20;
-const WR_UPBOOST       = 2;
+const WR_GRAVITY       = 0;
 const WR_DURATION      = 1.;
 const WJ_SIDE          = 6.5;
 const WJ_UP            = 8.5;
@@ -26,6 +25,9 @@ const BT_DURATION      = 4.5;
 const BT_SCALE_Q       = 0.03;
 const WALL_TRAIL_INTERVAL = 0.06;
 const SIDE_FLIP_VEL    = 7;
+const KICK_DURATION    = 1.0;
+const KICK_FORWARD     = 9;
+const KICK_SPIN_SPEED  = Math.PI * 4;
 
 export class Player {
   constructor(scene, camera) {
@@ -47,6 +49,7 @@ export class Player {
     this.sensitivityMul = 5.0;
 
     this._spacePrev    = false;
+    this._jumpHeld     = false;
     this._prevY        = 0;
     this._meshYaw      = 0;
     this._walkCycle    = 0;
@@ -61,6 +64,20 @@ export class Player {
     this._sideFlipping   = false;
     this._sideFlipAngle  = 0;
     this._sideFlipDir    = 1;
+    this._sideFlipWindup = false;
+    this._sideFlipWindupTimer  = 0;
+    this._sideFlipPendingDir   = 0;
+    this._sideFlipChargeTime   = 0;
+    this._kicking        = false;
+    this._kickTimer      = 0;
+    this._kickSpinAngle  = 0;
+
+    this._swordCombo      = 0;    // 0=ready 1=after-first 2=after-second
+    this._swordSwing      = null; // 'r' | 'l' | 'spin'
+    this._swordTimer      = 0;
+    this._swordDuration   = 0;
+    this._swordComboReset = 0;
+    this._clickPrev       = false;
 
     this._impacts    = [];
     this._impactGeo  = new THREE.SphereGeometry(0.13, 5, 4);
@@ -86,7 +103,7 @@ export class Player {
 
     // tunable physics: gravity multiplier and jump-force multiplier
     // controllable from UI / debugger via player.setGravityMul(...) / player.setJumpForceMul(...)
-    this._gravityMul = 1.0;
+    this._gravityMul = 2.0;
     // _jumpVelMul already exists and drives jump force; keep for API consistency
     // this._jumpVelMul initialized above
 
@@ -155,49 +172,55 @@ export class Player {
     const mat  = new THREE.MeshLambertMaterial({ color: 0xaa44ff, flatShading: true });
 
     // HEAD
-    const head = new THREE.Mesh(new THREE.SphereGeometry(0.11, 5, 4), mat);
-    head.position.y = 1.27;
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.12, 5, 4), mat);
+    head.position.y = 1.66;
     root.add(head);
 
+    // HAIR BUN — sits at back-top of head to read as female
+    const hair = new THREE.Mesh(new THREE.SphereGeometry(0.085, 4, 3), mat);
+    hair.position.set(0, 1.70, -0.09);
+    hair.scale.set(1.1, 0.75, 0.9);
+    root.add(hair);
+
     // NECK
-    const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.043, 0.053, 0.11, 5), mat);
-    neck.position.y = 1.17;
+    const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.038, 0.047, 0.13, 5), mat);
+    neck.position.y = 1.54;
     root.add(neck);
 
-    // CHEST — wider at top (shoulders), tapers to waist
-    const chest = new THREE.Mesh(new THREE.CylinderGeometry(0.155, 0.118, 0.27, 6), mat);
-    chest.position.y = 0.97;
+    // CHEST — narrow shoulders (female), tapers to waist
+    const chest = new THREE.Mesh(new THREE.CylinderGeometry(0.130, 0.100, 0.32, 6), mat);
+    chest.position.y = 1.25;
     root.add(chest);
 
-    // WAIST — narrowest point
-    const waist = new THREE.Mesh(new THREE.CylinderGeometry(0.110, 0.155, 0.17, 6), mat);
-    waist.position.y = 0.748;
+    // WAIST — very narrow hourglass
+    const waist = new THREE.Mesh(new THREE.CylinderGeometry(0.082, 0.100, 0.20, 6), mat);
+    waist.position.y = 0.97;
     root.add(waist);
 
-    // HIPS
-    const hips = new THREE.Mesh(new THREE.CylinderGeometry(0.168, 0.148, 0.14, 6), mat);
-    hips.position.y = 0.595;
+    // HIPS — wide (female)
+    const hips = new THREE.Mesh(new THREE.CylinderGeometry(0.210, 0.185, 0.17, 6), mat);
+    hips.position.y = 0.78;
     root.add(hips);
 
     // ARMS — pivot at shoulder joint
     for (const [xs, prop] of [[-1, '_lArmPivot'], [1, '_rArmPivot']]) {
       const pivot = new THREE.Group();
-      pivot.position.set(xs * 0.225, 1.10, 0);
+      pivot.position.set(xs * 0.20, 1.38, 0);
 
-      const upper = new THREE.Mesh(new THREE.CylinderGeometry(0.046, 0.040, 0.25, 5), mat);
-      upper.position.y = -0.125;
+      const upper = new THREE.Mesh(new THREE.CylinderGeometry(0.042, 0.036, 0.30, 5), mat);
+      upper.position.y = -0.15;
       pivot.add(upper);
 
-      const elbow = new THREE.Mesh(new THREE.SphereGeometry(0.040, 4, 3), mat);
-      elbow.position.y = -0.25;
+      const elbow = new THREE.Mesh(new THREE.SphereGeometry(0.036, 4, 3), mat);
+      elbow.position.y = -0.30;
       pivot.add(elbow);
 
-      const fore = new THREE.Mesh(new THREE.CylinderGeometry(0.036, 0.029, 0.22, 5), mat);
-      fore.position.y = -0.36;
+      const fore = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.026, 0.26, 5), mat);
+      fore.position.y = -0.43;
       pivot.add(fore);
 
-      const hand = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.07), mat);
-      hand.position.y = -0.47;
+      const hand = new THREE.Mesh(new THREE.BoxGeometry(0.058, 0.058, 0.068), mat);
+      hand.position.y = -0.60;
       pivot.add(hand);
 
       this[prop] = pivot;
@@ -207,31 +230,55 @@ export class Player {
     // LEGS — pivot at hip joint
     for (const [xs, prop] of [[-1, '_lLegPivot'], [1, '_rLegPivot']]) {
       const pivot = new THREE.Group();
-      pivot.position.set(xs * 0.10, 0.522, 0);
+      pivot.position.set(xs * 0.115, 0.68, 0);
 
-      const thigh = new THREE.Mesh(new THREE.CylinderGeometry(0.070, 0.055, 0.26, 5), mat);
-      thigh.position.y = -0.13;
+      const thigh = new THREE.Mesh(new THREE.CylinderGeometry(0.068, 0.052, 0.34, 5), mat);
+      thigh.position.y = -0.17;
       pivot.add(thigh);
 
-      const knee = new THREE.Mesh(new THREE.SphereGeometry(0.052, 4, 3), mat);
-      knee.position.y = -0.26;
+      const knee = new THREE.Mesh(new THREE.SphereGeometry(0.050, 4, 3), mat);
+      knee.position.y = -0.34;
       pivot.add(knee);
 
-      const shin = new THREE.Mesh(new THREE.CylinderGeometry(0.046, 0.034, 0.24, 5), mat);
-      shin.position.y = -0.38;
+      const shin = new THREE.Mesh(new THREE.CylinderGeometry(0.044, 0.032, 0.30, 5), mat);
+      shin.position.y = -0.49;
       pivot.add(shin);
 
-      const ankle = new THREE.Mesh(new THREE.SphereGeometry(0.034, 4, 3), mat);
-      ankle.position.y = -0.50;
+      const ankle = new THREE.Mesh(new THREE.SphereGeometry(0.032, 4, 3), mat);
+      ankle.position.y = -0.64;
       pivot.add(ankle);
 
       const foot = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.055, 0.20), mat);
-      foot.position.set(0, -0.522, 0.04);
+      foot.position.set(0, -0.66, 0.05);
       pivot.add(foot);
 
       this[prop] = pivot;
       root.add(pivot);
     }
+
+    // SWORD — child of right arm, always visible
+    const sMat   = new THREE.MeshLambertMaterial({ color: 0xc8d8e8, flatShading: true });
+    const hMat   = new THREE.MeshLambertMaterial({ color: 0x886622, flatShading: true });
+    const sg     = new THREE.Group();
+    sg.position.set(0.02, -0.60, 0.05);
+
+    const blade  = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.54, 0.007), sMat);
+    blade.position.y = 0.27;
+    sg.add(blade);
+
+    const guard  = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.025, 0.022), sMat);
+    sg.add(guard);
+
+    const shandle = new THREE.Mesh(new THREE.CylinderGeometry(0.019, 0.016, 0.16, 5), hMat);
+    shandle.position.y = -0.10;
+    sg.add(shandle);
+
+    const pommel = new THREE.Mesh(new THREE.SphereGeometry(0.028, 4, 3), hMat);
+    pommel.position.y = -0.20;
+    sg.add(pommel);
+
+    this._sword = sg;
+    this._rArmPivot.add(sg);
 
     return root;
   }
@@ -246,12 +293,9 @@ export class Player {
     this._shiftPrev = shiftDown;
 
     // ── Time scale (dive slow-mo > Q bullet time > normal) ───────────────────
-    const qDown = input.key('KeyQ');
     // accept either standard right-button index (2) or the (previous) 1 mapping
     const rmbDown = input.mouseBtn(2) || input.mouseBtn(1);
-    if (qDown && !this._qPrev && this.bulletTimeLeft <= 0) { this.bulletTimeLeft = BT_DURATION; this._btSlow = false; }
     if (rmbDown && !this._rmbPrev && this.bulletTimeLeft <= 0) { this.bulletTimeLeft = BT_DURATION; this._btSlow = false; }
-    this._qPrev   = qDown;
     this._rmbPrev = rmbDown;
     if (this.bulletTimeLeft > 0) this.bulletTimeLeft = Math.max(0, this.bulletTimeLeft - realDt);
     if (input.key('Digit1')) this._weaponMode = 1;
@@ -283,11 +327,16 @@ export class Player {
 
     this._look(input);
     this._handleFire(realDt, input);
-    if (!this._sliding) this._setHorizVel(input);
+    this._handleSword(realDt, input);
+    if (!this._sliding && !this._sideFlipWindup) this._setHorizVel(input);
 
-    // slide friction
+    // slide / windup friction
     if (this._sliding) {
       const friction = Math.exp(-3 * dt);
+      this.vel.x *= friction;
+      this.vel.z *= friction;
+    } else if (this._sideFlipWindup) {
+      const friction = Math.exp(-20 * dt);
       this.vel.x *= friction;
       this.vel.z *= friction;
     }
@@ -301,7 +350,7 @@ export class Player {
 
     if (!this._sliding) {
       this._updateWallRun(dt);
-      this._handleJump(input);
+      this._handleJump(input, dt);
     }
 
     // spawn wall trail while wall-running, at intervals
@@ -315,9 +364,20 @@ export class Player {
       this._wallTrailTimer = 0;
     }
 
-    // vertical
-    if (!this.grounded) {
-      const baseGrav = GRAVITY * this._gravityMul;
+    // kick timer
+    if (this._kicking) {
+      this._kickTimer     -= dt;
+      this._kickSpinAngle += KICK_SPIN_SPEED * dt;
+      if (this._kickTimer <= 0) {
+        this._kicking       = false;
+        this._kickSpinAngle = 0;
+      }
+    }
+
+    // vertical — gravity suspended during kick
+    if (!this.grounded && !this._kicking) {
+      const jumpCutMul = (!this._jumpHeld && this.vel.y > 0 && !this.wallRunning && !this._sideFlipping) ? 4.0 : 1.0;
+      const baseGrav = GRAVITY * this._gravityMul * jumpCutMul;
       const grav = this.wallRunning ? WR_GRAVITY * this._gravityMul : baseGrav;
       this.vel.y += grav * dt;
     }
@@ -335,12 +395,45 @@ export class Player {
   }
 
   _handleFire(realDt, input) {
-    this._shooting = input.mouseBtn(0);
+    this._shooting = input.key('KeyQ');
     this._fireTimer = Math.max(0, this._fireTimer - realDt);
     if (this._shooting && this._fireTimer <= 0 && this._bullets.length < MAX_BULLETS) {
       this._spawnBullet();
       this._fireTimer = FIRE_RATE;
     }
+  }
+
+  _handleSword(realDt, input) {
+    const click = input.mouseBtn(0);
+
+    if (this._swordTimer > 0) this._swordTimer -= realDt;
+    if (this._swordTimer <= 0) this._swordSwing = null;
+
+    if (this._swordComboReset > 0) {
+      this._swordComboReset -= realDt;
+      if (this._swordComboReset <= 0) this._swordCombo = 0;
+    }
+
+    if (click && !this._clickPrev) {
+      this._swordComboReset = 1.2;
+      if (this._swordCombo === 0) {
+        this._swordSwing    = 'r';
+        this._swordDuration = 0.22;
+        this._swordTimer    = 0.22;
+        this._swordCombo    = 1;
+      } else if (this._swordCombo === 1) {
+        this._swordSwing    = 'l';
+        this._swordDuration = 0.22;
+        this._swordTimer    = 0.22;
+        this._swordCombo    = 2;
+      } else {
+        this._swordSwing    = 'spin';
+        this._swordDuration = 0.45;
+        this._swordTimer    = 0.45;
+        this._swordCombo    = 0;
+      }
+    }
+    this._clickPrev = click;
   }
 
   _handWorldPos(side = 1) {
@@ -623,8 +716,30 @@ export class Player {
     if (scroll) this.camDist = Math.max(1.5, Math.min(10, this.camDist + scroll * 0.005));
   }
 
-  _handleJump(input) {
+  _handleJump(input, dt) {
     const down = input.key('Space');
+    if (!down) this._jumpHeld = false;
+    if (this._sideFlipWindup) {
+      this._sideFlipChargeTime += dt;
+      if (!down && this._spacePrev) {
+        this._sideFlipWindup = false;
+        // 0 = instant tap, 1 = fully charged (stopped)
+        const charge   = Math.min(1.0, this._sideFlipChargeTime / 0.4);
+        const dir      = this._sideFlipPendingDir;
+        const camRight = new THREE.Vector3(Math.cos(this.camYaw), 0, -Math.sin(this.camYaw));
+        const horizVel = SIDE_FLIP_VEL * (0.5 + 1.0 * charge);
+        this.vel.x = camRight.x * dir * horizVel;
+        this.vel.z = camRight.z * dir * horizVel;
+        this.vel.y = JUMP_VEL * this._jumpVelMul * (0.35 + 0.45 * charge);
+        this._sideFlipping  = true;
+        this._sideFlipAngle = 0;
+        this._sideFlipDir   = dir;
+        this.jumps++;
+        this.grounded = false;
+      }
+      this._spacePrev = down;
+      return;
+    }
     if (down && !this._spacePrev) {
       if (this.wallRunning) {
         this.vel.x         = this._wallNormal.x * WJ_SIDE;
@@ -634,23 +749,28 @@ export class Player {
         this._wallRunTimer = 0;
         this.jumps         = 1;
         this.grounded      = false;
+        this._jumpHeld     = true;
       } else if (this.jumps < MAX_JUMPS) {
         const leftDown  = input.key('KeyA');
         const rightDown = input.key('KeyD');
         if ((leftDown || rightDown) && !(leftDown && rightDown)) {
-          const dir      = rightDown ? 1 : -1;
-          const camRight = new THREE.Vector3(Math.cos(this.camYaw), 0, -Math.sin(this.camYaw));
-          this.vel.x = camRight.x * dir * SIDE_FLIP_VEL;
-          this.vel.z = camRight.z * dir * SIDE_FLIP_VEL;
-          this.vel.y = JUMP_VEL * this._jumpVelMul;
-          this._sideFlipping  = true;
-          this._sideFlipAngle = 0;
-          this._sideFlipDir   = dir;
+          this._sideFlipWindup     = true;
+          this._sideFlipPendingDir = rightDown ? 1 : -1;
+          this._sideFlipChargeTime = 0;
         } else {
-          this.vel.y = JUMP_VEL * this._jumpVelMul;
+          this.vel.y     = JUMP_VEL * this._jumpVelMul;
+          this.jumps++;
+          this.grounded  = false;
+          this._jumpHeld = true;
         }
-        this.jumps++;
-        this.grounded = false;
+      } else if (!this.grounded && !this._kicking && !this.wallRunning) {
+        const fwd = new THREE.Vector3(-Math.sin(this.camYaw), 0, -Math.cos(this.camYaw));
+        this.vel.y = 0;
+        this.vel.x = fwd.x * KICK_FORWARD;
+        this.vel.z = fwd.z * KICK_FORWARD;
+        this._kicking       = true;
+        this._kickTimer     = KICK_DURATION;
+        this._kickSpinAngle = 0;
       }
     }
     this._spacePrev = down;
@@ -717,8 +837,7 @@ export class Player {
       this.wallRunning   = true;
       this._wallRunTimer = 0;
       this.jumps         = Math.min(this.jumps, 1);
-      // inject upward velocity if near-zero so player arcs up, then falls
-      if (this.vel.y < WR_UPBOOST) this.vel.y = WR_UPBOOST;
+      this.vel.y         = 0;
     }
     if (this.wallRunning) {
       if (!this._wallNormal) {
@@ -751,7 +870,7 @@ export class Player {
       }
     }
     if (this.pos.y < 0) { this.pos.y = 0; this.vel.y = 0; onGround = true; }
-    if (onGround) { this.jumps = 0; this._sideFlipping = false; }
+    if (onGround) { this.jumps = 0; this._sideFlipping = false; this._kicking = false; }
     this.grounded = onGround;
   }
 
@@ -778,12 +897,49 @@ export class Player {
     if (this._sliding) {
       this.mesh.quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), this._meshYaw);
       this.mesh.scale.set(1, 0.55, 1);
-      this.mesh.position.y = this.pos.y - 0.25;
       this._lLegPivot.rotation.x = 1.1;
       this._rLegPivot.rotation.x = 0.8;
       this.mesh.rotation.z *= 0.75;
       this._rArmPivot.quaternion.slerp(rQ, 0.2);
       this._lArmPivot.quaternion.slerp(lQ, 0.2);
+      return;
+    }
+
+    // ── aerial spin kick ─────────────────────────────────────────────────────
+    if (this._kicking) {
+      const camFwd = new THREE.Vector3();
+      this.camera.getWorldDirection(camFwd);
+      const kickYaw = Math.atan2(camFwd.x, camFwd.z);
+
+      // Smoothly lean in over first 0.15 s and back out over last 0.15 s so the
+      // model centre stays at a constant world-space height throughout.
+      const elapsed   = KICK_DURATION - this._kickTimer;
+      const rampTime  = 0.15;
+      const entryT    = Math.min(1.0, elapsed / rampTime);
+      const exitT     = Math.min(1.0, this._kickTimer / rampTime);
+      const leanT     = entryT * exitT;
+      const leanAngle = Math.PI * 0.5 * leanT;
+
+      const fwdAxis  = new THREE.Vector3(-Math.sin(kickYaw), 0, -Math.cos(kickYaw));
+      const spinQ    = new THREE.Quaternion().setFromAxisAngle(fwdAxis, this._kickSpinAngle);
+      const camRight = new THREE.Vector3( Math.cos(kickYaw), 0, -Math.sin(kickYaw));
+      const leanQ    = new THREE.Quaternion().setFromAxisAngle(camRight, leanAngle);
+      this.mesh.quaternion.copy(spinQ).multiply(leanQ);
+      this.mesh.scale.set(1, 1, 1);
+
+      // Lift mesh origin so the visual centre stays at standing height.
+      // When lean=θ, centre drops by (1-cos θ)*halfH; we compensate here.
+      this.mesh.position.y = this.pos.y + 0.89 * (1 - Math.cos(leanAngle));
+
+      this._rLegPivot.rotation.x = 0;
+      this._lLegPivot.rotation.x = 0;
+      this._rLegPivot.rotation.z = 0;
+      this._lLegPivot.rotation.z = 0;
+
+      rQ.setFromAxisAngle(new THREE.Vector3(1, 0, 0), 1.8 * leanT);
+      lQ.setFromAxisAngle(new THREE.Vector3(1, 0, 0), 1.8 * leanT);
+      this._rArmPivot.quaternion.copy(rQ);
+      this._lArmPivot.quaternion.copy(lQ);
       return;
     }
 
@@ -895,7 +1051,25 @@ export class Player {
       // not shooting, not diving → rQ/lQ remain identity (arms hang at sides)
     }
 
-    this._rArmPivot.quaternion.slerp(rQ, 0.25);
+    // ── sword swing overrides arm quaternions ────────────────────────────────
+    if (this._swordSwing) {
+      const t = 1.0 - this._swordTimer / this._swordDuration; // 0→1
+      if (this._swordSwing === 'r') {
+        const sA = new THREE.Quaternion().setFromEuler(new THREE.Euler(-1.7, 0,  1.3));
+        const eA = new THREE.Quaternion().setFromEuler(new THREE.Euler( 0.5, 0, -0.9));
+        rQ.slerpQuaternions(sA, eA, t);
+      } else if (this._swordSwing === 'l') {
+        const sA = new THREE.Quaternion().setFromEuler(new THREE.Euler(-1.7, 0, -1.3));
+        const eA = new THREE.Quaternion().setFromEuler(new THREE.Euler( 0.5, 0,  0.9));
+        rQ.slerpQuaternions(sA, eA, t);
+      } else if (this._swordSwing === 'spin') {
+        rQ.setFromAxisAngle(new THREE.Vector3(0, 0, 1), -1.4);
+        lQ.setFromAxisAngle(new THREE.Vector3(0, 0, 1),  1.4);
+        this.mesh.rotation.y = this._meshYaw + Math.PI * 2 * t;
+      }
+    }
+
+    this._rArmPivot.quaternion.slerp(rQ, this._swordSwing ? 0.6 : 0.25);
     this._lArmPivot.quaternion.slerp(lQ, 0.25);
 
     // ── squash & stretch (airborne only) ─────────────────────────────────────
